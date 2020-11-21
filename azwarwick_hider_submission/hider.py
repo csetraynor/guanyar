@@ -16,7 +16,7 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.regularizers import l2
 from functools import partial
 from scipy.stats import bernoulli
-from utils.data_preprocess import preprocess_data
+from utils.copy_data_preprocess import preprocess_data
 
 # ---------------------------- #
 # GAIN Imputation network
@@ -26,8 +26,8 @@ def hint_generator(X, M):
     # takes X: data with raw imputed values
     #       M: mask
     # return : hint input to generator network.
-    noise =  tf.random.normal(shape=X.shape, stddev=1) 
-    hint = tf.keras.activations.relu( M * (X + noise) + (1 - M) * X ) 
+    noise =  tf.random.normal(shape=X.shape, stddev=1)
+    hint = tf.keras.activations.relu( M * (X + noise) + (1 - M) * X )
     return hint
 
 def gain_loss(model, x, target, training = True):
@@ -61,12 +61,12 @@ def create_gain(dim):
 
 def gain_train_step(dataset, gain, n_epochs):
     generator, discriminator = gain.layers
-    discriminator_optimizer = keras.optimizers.SGD(momentum=0.9, nesterov=True) 
+    discriminator_optimizer = keras.optimizers.SGD(momentum=0.9, nesterov=True)
     generator_optimizer = keras.optimizers.Adam()
     # Keep results for plotting
     train_discriminator_loss_results = []
     train_generator_loss_results = []
-    
+
     for epoch in range(n_epochs):
         epoch_discriminator_loss_avg = Mean()
         epoch_generator_loss_avg = Mean()
@@ -77,24 +77,21 @@ def gain_train_step(dataset, gain, n_epochs):
             hint = hint_generator(x_batch, mask_batch)
             generated_samples = generator(concat( [hint, mask_batch], axis = 1))
             discriminator.trainable = True
-            discriminator_loss_value, discriminator_grads = gain_grad(discriminator, generated_samples, mask_batch) 
+            discriminator_loss_value, discriminator_grads = gain_grad(discriminator, generated_samples, mask_batch)
             discriminator_optimizer.apply_gradients(zip(discriminator_grads, discriminator.trainable_variables))
             # phase 2 - training the generator
             hint = hint_generator(x_batch, mask_batch)
             discriminator.trainable = False
-            generator_loss_value, generator_grads = gain_grad(gain, concat( [hint, mask_batch], axis = 1), mask_batch) 
+            generator_loss_value, generator_grads = gain_grad(gain, concat( [hint, mask_batch], axis = 1), mask_batch)
             generator_optimizer.apply_gradients(zip(generator_grads, gain.trainable_variables))
             # Track progress: Add current batch loss
             epoch_discriminator_loss_avg.update_state(discriminator_loss_value)
             epoch_generator_loss_avg.update_state(generator_loss_value)
-            
+
         # End epoch
         train_discriminator_loss_results.append(epoch_discriminator_loss_avg.result())
         train_generator_loss_results.append(epoch_generator_loss_avg.result())
-        if epoch % 50 == 0:
-            print("GAIN Epoch {:03d}: Discriminator Loss: {:.3f}".format(epoch, epoch_discriminator_loss_avg.result() ) , file=sys.stdout)
-            print("GAIN Epoch {:03d}: Generator Loss: {:.3f}".format(epoch, epoch_generator_loss_avg.result() ) , file=sys.stdout)
-            
+
     return gain, train_discriminator_loss_results, train_generator_loss_results
 
 
@@ -116,7 +113,7 @@ def imputation_gain(data_preproc, data_imputed, n_epochs):
     hint = hint_generator(data_imputed, data_mask)
     gain_data_imputed = data_mask * generator(concat( [hint, data_mask], axis = 1)) + (1 - data_mask) * data_imputed
     gain_data_imputed = post_process_gain(gain_data_imputed, data_mask, seq_times)
-    
+
     return gain_data_imputed, max_seq_len
 
 # ----------------------------- #
@@ -127,7 +124,7 @@ def imputation_gain(data_preproc, data_imputed, n_epochs):
 def create_recurrent_gan(dim):
     RegularisedGRU = partial(GRU, kernel_regularizer=l2(0.01))
     def mask_positive_layer(x, dim):
-        ones = tf.ones(shape = [tf.cast(1 + (dim / 2), tf.int32) ] ) 
+        ones = tf.ones(shape = [tf.cast(1 + (dim / 2), tf.int32) ] )
         zeros = tf.zeros(shape = [tf.cast(dim / 2, tf.int32) ])
         mask = tf.concat( [ones, zeros], axis = 0)
         return tf.keras.activations.relu(x + 1) * mask + tf.sigmoid(x) * (1-mask)
@@ -169,15 +166,15 @@ def grad(model, inputs, targets, mask):
     return loss_value, tape.gradient(loss_value, model.trainable_variables)
 
 def train_rgan(gan_model, dataset, n_epochs):
-    
-    generator_optimizer = keras.optimizers.Adam(lr=0.01, beta_1=0.9, beta_2=0.999, clipnorm=1.) 
-    discriminator_optimizer = keras.optimizers.SGD(lr=0.1, momentum=0.9, nesterov=True, clipnorm=1.) 
+
+    generator_optimizer = keras.optimizers.Adam(lr=0.01, beta_1=0.9, beta_2=0.999, clipnorm=1.)
+    discriminator_optimizer = keras.optimizers.SGD(lr=0.1, momentum=0.9, nesterov=True, clipnorm=1.)
     recurrent_generator, recurrent_discriminator = gan_model.layers
-    
+
     # Keep results for plotting
     train_discriminator_loss_results = []
     train_generator_loss_results = []
-    
+
     for epoch in range(n_epochs):
         epoch_discriminator_loss_avg = Mean()
         epoch_generator_loss_avg = Mean()
@@ -194,27 +191,23 @@ def train_rgan(gan_model, dataset, n_epochs):
             mask1 = tf.ones([no, seq_len])
             mask_fake_and_real = concat([mask1, mask_batch], axis=1)
             recurrent_discriminator.trainable = True
-            discriminator_loss_value, discriminator_grads = grad(recurrent_discriminator, x_fake_and_real, y1, mask_fake_and_real) 
+            discriminator_loss_value, discriminator_grads = grad(recurrent_discriminator, x_fake_and_real, y1, mask_fake_and_real)
             discriminator_optimizer.apply_gradients(zip(discriminator_grads, recurrent_discriminator.trainable_variables))
             # phase 2 - training the generator
             noise = noise_generator(no, seq_len, dim)
             y2 = cast(reshape( constant([[1.]] * seq_len), [seq_len, 1]), float32)
             y2 = tf.broadcast_to(y2, [no, seq_len, 1])
             recurrent_discriminator.trainable = False
-            generator_loss_value, generator_grads = grad(gan_model, noise, y2, mask1) 
+            generator_loss_value, generator_grads = grad(gan_model, noise, y2, mask1)
             generator_optimizer.apply_gradients(zip(generator_grads, gan_model.trainable_variables))
             # Track progress: Add current batch loss
             epoch_discriminator_loss_avg.update_state(discriminator_loss_value)
-            epoch_generator_loss_avg.update_state(generator_loss_value)  
-            
+            epoch_generator_loss_avg.update_state(generator_loss_value)
+
         # End epoch
         train_discriminator_loss_results.append(epoch_discriminator_loss_avg.result())
         train_generator_loss_results.append(epoch_generator_loss_avg.result())
-        
-        if epoch % 50 == 0:
-            print("RGAN Epoch {:03d}: Discriminator Loss: {:.3f}".format(epoch, epoch_discriminator_loss_avg.result() ) , file=sys.stdout)
-            print("RGAN Epoch {:03d}: Generator Loss: {:.3f}".format(epoch, epoch_generator_loss_avg.result() ) , file=sys.stdout)
-            
+
     return gan_model, train_discriminator_loss_results, train_generator_loss_results
 
 def fit_recurrent_gan(imputed_data, max_length, num_epoch, batch_size):
@@ -223,16 +216,16 @@ def fit_recurrent_gan(imputed_data, max_length, num_epoch, batch_size):
     imputed_data = pre_process_time(imputed_data)
     ds = tf.ragged.constant(imputed_data)
     ds = tf.data.Dataset.from_tensor_slices(ds)
-    ds = ds.map(lambda l: l.to_tensor()) 
+    ds = ds.map(lambda l: l.to_tensor())
     mask_value = cast(-1, float32)
-    ds = ds.padded_batch(batch_size, padded_shapes=[None, dim], padding_values= mask_value ).prefetch(1)  
+    ds = ds.padded_batch(batch_size, padded_shapes=[None, dim], padding_values= mask_value ).prefetch(1)
     ds = tf.data.Dataset.zip((ds.map(lambda x: cast(x , float32)), # x_batch
                               ds.map(lambda m: cast(m[:,:,0] != mask_value , float32)) # Mask
                              ))
     gan_model = create_recurrent_gan(dim)
     # Train model
     gan_model,  _discriminator_loss, _generator_loss = train_rgan(gan_model, ds, num_epoch)
-    
+
     # Generate output data
     recurrent_generator, recurrent_discriminator = gan_model.layers
     noise = noise_generator(no, max_length, dim)
@@ -241,13 +234,13 @@ def fit_recurrent_gan(imputed_data, max_length, num_epoch, batch_size):
     return generated_samples, gan_model, _discriminator_loss, _generator_loss
 
 # ----------------------------- #
-# Data helpers 
+# Data helpers
 # ----------------------------- #
 def preformat_data(data_preproc, data_imputed):
-    mask = (np.isnan(data_preproc)).astype('float32') 
+    mask = (np.isnan(data_preproc)).astype('float32')
     # Basic Parameters
     no, seq_len, dim = np.asarray(data_imputed).shape
-    # drop rectangular array in favour of ragged array approach 
+    # drop rectangular array in favour of ragged array approach
     foo_imputed = list()
     for i in range(no):
         foo_imputed.append(data_imputed[i][data_imputed[i].sum(axis = 1) > 0,:])
@@ -255,7 +248,7 @@ def preformat_data(data_preproc, data_imputed):
     for i in range(no):
         foo_mask.append(mask[i][data_imputed[i].sum(axis = 1) > 0,:])
     get_seq_len = lambda l: l.shape[0]
-    seq_times = list(map(get_seq_len, foo_imputed)) 
+    seq_times = list(map(get_seq_len, foo_imputed))
     return foo_imputed, foo_mask, seq_times, seq_len
 
 def post_process_gain(generated_imputed_data, mask, seq_times):
@@ -310,15 +303,11 @@ def hider(input_dict: Dict) -> Union[np.ndarray, Tuple[np.ndarray, Optional[np.n
 
     # Get processed and imputed data:
     data_preproc, data_imputed = preprocess_data(data, padding_mask)
-    
-    print('Starting imputation GAIN ...')
-    num_epoch = 4000
+
+    num_epoch = 2000
     batch_size = 64
     data_imputed, max_length = imputation_gain(data_preproc, data_imputed, num_epoch)
-    
-    print('Starting recurrent GAN ...', file=sys.stdout)
+
     generated_samples, gan_model, _discriminator_loss, _generator_loss = fit_recurrent_gan(data_imputed, max_length, num_epoch, batch_size)
-    
+
     return generated_samples
-
-
