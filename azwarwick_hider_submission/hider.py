@@ -17,7 +17,7 @@ from sklearn.utils import resample
 
 
 # ----------------------------------------------- #
-# RAEwGAN Recurrent Aeuto-encoder Wasserstein GAN # 
+# RAEwGAN Recurrent Aeuto-encoder Wasserstein GAN #
 # ----------------------------------------------- #
 
 # Define models
@@ -152,12 +152,12 @@ def train_raegan_step(dataset, n_epoch, n_critic, seq_len, latent_dim, dim):
     # create optimizers
     adam_optimizer = tf.keras.optimizers.Adam()
     rmsprop_optimizer = tf.keras.optimizers.RMSprop(lr=0.00005)
-    
+
     # Keep results for plotting
     train_dx_loss_results = []
     train_dz_loss_results = []
     train_rec_loss_results = []
-    
+
     for epoch in range(n_epoch):
         epoch_dx_loss_avg = Mean()
         epoch_dz_loss_avg = Mean()
@@ -217,16 +217,16 @@ def train_raegan_step(dataset, n_epoch, n_critic, seq_len, latent_dim, dim):
             epoch_dx_loss_avg.update_state(d_loss1)
             epoch_dz_loss_avg.update_state(ae_loss1)
             epoch_rec_loss_avg.update_state(rec_loss1)
-        
+
         # End epoch
         train_dx_loss_results.append(epoch_dx_loss_avg.result())
         train_dz_loss_results.append(epoch_dz_loss_avg.result())
         train_rec_loss_results.append(epoch_rec_loss_avg.result())
-        
+
     return rnn_encogen, train_dx_loss_results, train_dz_loss_results, train_rec_loss_results
 
 def rae_wgan(input_dat, seq_times, padding_mask, batch_size, n_epoch, n_critic, latent_dim):
-    
+
     no, seq_len, dim = input_dat.shape
     input_dat = tf.cast(input_dat, tf.float32)
     padding_mask = tf.cast(padding_mask, tf.float32)
@@ -235,10 +235,10 @@ def rae_wgan(input_dat, seq_times, padding_mask, batch_size, n_epoch, n_critic, 
     dataset = dataset.shuffle(no, reshuffle_each_iteration=True)
     # train gain model
     rnn_encogen, _discriminator, _generator, _reconstruction = train_raegan_step(dataset,n_epoch, n_critic, seq_len, latent_dim, dim)
-    
+
     # Bootstrap dataset
     res, simulated_padding_mask = bootstrap_results(rnn_encogen, input_dat, seq_times)
-    
+
     return res, simulated_padding_mask
 
 # ------------------------------------------ #
@@ -255,7 +255,7 @@ def create_wgain(dim, latent_dim):
         def get_config(self):
             return {'clip_value': self.clip_value}
     # define generator
-    generator = tfkm.Sequential([ 
+    generator = tfkm.Sequential([
         tfkl.Dense(24, input_shape = [latent_dim], kernel_initializer="he_normal"),
         tfkl.LeakyReLU(alpha=0.2),
         tfkl.Dropout(0.2),
@@ -265,19 +265,18 @@ def create_wgain(dim, latent_dim):
         tfkl.LeakyReLU(alpha=0.2),
         tfkl.Dropout(0.2),
         # output
-        tfkl.Dense(dim),
-        tfkl.Lambda(lambda x: tf.abs(x))
+        tfkl.Dense(dim)
     ])
     # weight constraint
     cont = ClipConstraint(0.01)
     # define critic
-    critic = tfkm.Sequential([ 
-        # downsample to 42
-        tfkl.Dense(42, input_shape = [dim], kernel_constraint = cont, kernel_initializer="he_normal"),
+    critic = tfkm.Sequential([
+        # upsample
+        tfkl.Dense(87, input_shape = [dim], kernel_constraint = cont, kernel_initializer="he_normal"),
         tfkl.BatchNormalization(),
         tfkl.LeakyReLU(alpha=0.2),
         # hidden layer
-        tfkl.Dense(100, kernel_constraint = cont, kernel_initializer="he_normal"),
+        tfkl.Dense(93, kernel_constraint = cont, kernel_initializer="he_normal"),
         tfkl.BatchNormalization(),
         tfkl.LeakyReLU(alpha=0.2),
         # scoring linear activation
@@ -285,23 +284,19 @@ def create_wgain(dim, latent_dim):
     ])
     return tfkm.Sequential([generator, critic])
 
-# implementation of wasserstein loss
-def wasserstein_loss(y_true, y_pred):
-    return backend.mean(y_true * y_pred)
-
 def hint_generator(X, M):
     # takes X: data with raw imputed values
     #       M: mask
     # return : hint input to generator network.
     noise =  tf.random.normal(shape = X.shape)
-    hint =  M * (X + noise) + (1 - M) * X 
+    hint =  M * (X + noise) + (1 - M) * X
     return hint
 
 # Define loss and gradients
 def discriminator_grad(model, inputs, mask):
     with tf.GradientTape() as tape:
         output = model(inputs, training = True)
-        loss_value = wasserstein_loss(y_true = mask, y_pred = output) 
+        loss_value = wasserstein_loss(y_true = mask, y_pred = output)
     return loss_value, tape.gradient(loss_value, model.trainable_variables)
 
 def gain_grad(gain, inputs):
@@ -320,7 +315,7 @@ def rec_grad(generator_layer, inputs, mask, alpha):
     return rec_loss, tape.gradient(rec_loss, generator_layer.trainable_variables)
 
 def train_wgain(dataset, gain, n_epoch, n_critic, alpha):
-    
+
     generator, discriminator = gain.layers
     d_optimizer = keras.optimizers.RMSprop(lr=0.00005)
     g_optimizer = keras.optimizers.Adam()
@@ -328,7 +323,7 @@ def train_wgain(dataset, gain, n_epoch, n_critic, alpha):
     train_d_loss_results = []
     train_g_loss_results = []
     train_rec_loss_results = []
-    
+
     for epoch in range(n_epoch):
         epoch_d_loss_avg = Mean()
         epoch_g_loss_avg = Mean()
@@ -358,12 +353,12 @@ def train_wgain(dataset, gain, n_epoch, n_critic, alpha):
         train_d_loss_results.append(epoch_d_loss_avg.result())
         train_g_loss_results.append(epoch_g_loss_avg.result())
         train_rec_loss_results.append(epoch_rec_loss_avg.result())
-        
+
     return gain, train_d_loss_results, train_g_loss_results, train_rec_loss_results
 
 def imputation(comp_data, mask_data, padding_mask, batch_size, n_epoch, alpha, n_critic):
-    
-    input_dat, input_mask, seq_times, seq_len = preformat_data_gain(comp_data, mask_data, padding_mask) 
+
+    input_dat, input_mask, seq_times, seq_len = preformat_data_gain(comp_data, mask_data, padding_mask)
     input_dat = np.concatenate(input_dat, axis = 0)
     input_mask = np.concatenate(input_mask, axis = 0)
     input_mask[input_mask == 0] = -1 # real data points
@@ -377,13 +372,13 @@ def imputation(comp_data, mask_data, padding_mask, batch_size, n_epoch, alpha, n
     gain_model = create_wgain(dim, dim)
     gain_model, _discriminator, _generator, _reconstruction = train_wgain(dataset, gain_model, n_epoch,  n_critic, alpha)
     generator , discriminator = gain_model.layers
-    
+
     # Impute dataset
     hint = hint_generator(input_dat, input_mask)
     input_mask = tf.cast(tf.equal(input_mask, 1.0), tf.float32) # real data points --> 0, fake --> 1
     imputed_data = input_mask * generator(hint) + (1 - input_mask) * input_dat
     imputed_data = post_process_data_gain(imputed_data.numpy(), input_mask.numpy(), seq_times)
-    
+
     imputed_data, padding_mask = post_process_list_wgain(imputed_data, np.max(seq_times))
     return imputed_data, padding_mask, seq_times
 
@@ -400,7 +395,7 @@ def interpolation_fun(dat, padding_mask) :
         median_val[k] = np.nanmedian(feature[padding_mask[:,:,k] != True])
         if np.isnan(median_val[k]):
             all_nan[k] = 1.0
-    # attempt interpolation         
+    # attempt interpolation
     for i in range(no):
         for k in range(dim):
             observed_values = (dat[i,:,k][padding_mask[i,:,k] != True]).copy()
@@ -434,7 +429,7 @@ def MinMaxScaler(ori_data, padder_value = -1.):
         min_value[k] = np.nanmin(norm_data[:,:,k][norm_data[:,:,k] != padder_value])
         norm_data[:,:,k] = (norm_data[:,:,k] - min_value[k]) / (max_value[k] + min_value[k] + 1e-7 )
     return norm_data, max_value, min_value
-    
+
 def DeScaler(data, max_value, min_value, all_nan):
     no, seq_len, dim = data.shape
     dim = len(all_nan)
@@ -491,7 +486,7 @@ def post_process_list_wgain(dat, max_seq_len):
 
 def bootstrap_results(model, input_data, seq_times):
     no, seq_len, dim = input_data.shape
-    boots =  resample(range(no), replace=True, n_samples=no) 
+    boots =  resample(range(no), replace=True, n_samples=no)
     simulated_data = - np.ones(shape = (no, seq_len, dim))
     simulated_padding_mask = np.ones(shape = (no, seq_len, dim))
     for i in range(no):
@@ -499,7 +494,7 @@ def bootstrap_results(model, input_data, seq_times):
         ori_data = input_data[boot:(1+boot)]
         reconstructed_samples = model(ori_data, training = True)
         reconstructed_samples = reconstructed_samples.numpy()
-        reconstructed_samples[:, :, 0] = np.abs(reconstructed_samples[:, :, 0]) 
+        reconstructed_samples[:, :, 0] = np.abs(reconstructed_samples[:, :, 0])
         time_order = np.argsort(reconstructed_samples[0, :, 0])
         reconstructed_samples = reconstructed_samples[:, time_order, :]
         start_len = seq_len - seq_times[boot]
@@ -548,19 +543,19 @@ def hider(input_dict: Dict) -> Union[np.ndarray, Tuple[np.ndarray, Optional[np.n
     seed = input_dict["seed"]  # Random seed provided by the competition, use for reproducibility.
     data = input_dict["data"]  # Input data, shape [num_examples, max_seq_len, num_features].
     padding_mask = input_dict["padding_mask"]  # Padding mask of bools, same shape as data.
-    
+
     # Process data
     norm_data, max_value, min_value = MinMaxScaler(data.copy())
     mask_data = (np.isnan(norm_data)).astype("float32")
     mask_data[padding_mask] = -1.
     norm_data[padding_mask] = -1.
     no, seq_le, dim = norm_data.shape
-    
+
     interp_dat, median_val, all_nan = interpolation_fun(norm_data.copy(), padding_mask)
     complete_data = interp_dat[:,:,all_nan != 1]
     mask_data = mask_data[:,:,all_nan != 1]
     padding_mask = padding_mask[:,:,all_nan != 1]
-    
+
     # ------------------------------------- #
     # Set hyper-parameters for imputation network #
     # ------------------------------------- #
@@ -568,19 +563,19 @@ def hider(input_dict: Dict) -> Union[np.ndarray, Tuple[np.ndarray, Optional[np.n
     alpha = 10
     n_critic = 5
     n_epoch = 10
-    
+
     imputed_data, padding_mask, seq_times = imputation(complete_data, mask_data, padding_mask, batch_size, n_epoch, alpha, n_critic)
-    
+
     # ------------------------------------- #
     # Set hyper-parameters for rae_wgan network #
     # ------------------------------------- #
-    n_epoch = 25
+    n_epoch = 15
     latent_dim = 42
     n_critic = 5
     batch_size = 64
-    
-    res, simulated_padding_mask = rae_wgan(imputed_data, seq_times, padding_mask, batch_size, n_epoch, n_critic, latent_dim) 
-    
+
+    res, simulated_padding_mask = rae_wgan(imputed_data, seq_times, padding_mask, batch_size, n_epoch, n_critic, latent_dim)
+
     # post process results
     simulated_padding_mask = simulated_padding_mask.astype('bool')
     res = post_process_rgan(res)
