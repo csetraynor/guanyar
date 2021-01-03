@@ -22,6 +22,13 @@ from sklearn.utils import resample
 
 # Define models
 def define_recurrent_encoder(timesteps, features, latent_dim):
+   ''' Define recurrent encoder
+       args: 
+       dimensions timesteps, feautres.
+       latent dim: hyper-parameter
+       return:
+       recurrent encoder model
+    '''
     recurrent_encoder = tfkm.Sequential([
         tfkl.Masking(mask_value=-1.,
                      input_shape=(timesteps, features)),
@@ -31,16 +38,27 @@ def define_recurrent_encoder(timesteps, features, latent_dim):
     ])
     return recurrent_encoder
 
-# define critic weight clipping
 class ClipConstraint(tf.keras.constraints.Constraint):
+    ''' Clip model weight to a given hypercube
+    '''
+    # set clip values when initialized
     def __init__(self, clip_value):
         self.clip_value = clip_value
+    # clip model weights to hypercuber
     def __call__(self, weights):
         return backend.clip(weights, -self.clip_value, self.clip_value)
+    # get the config
     def get_config(self):
         return {'clip_value': self.clip_value}
 
 def define_recurrent_decoder_critic(timesteps, latent_dim):
+    ''' Define recurrent decoder
+       args: 
+         dimensions timesteps.
+         latent dim: hyper-parameter
+       return:
+         recurrent decoder model
+    '''
     # weight constraint
     cont = ClipConstraint(0.01)
     recurrent_decoder_critic = tfkm.Sequential([
@@ -54,6 +72,12 @@ def define_recurrent_decoder_critic(timesteps, latent_dim):
     return recurrent_decoder_critic
 
 def define_recurrent_critic(timesteps, features):
+    ''' Define recurrent critic
+       args: 
+         dimensions timesteps, features.
+       return:
+         recurrent critic model
+    '''
     # weight constraint
     cont = ClipConstraint(0.01)
     # define critic
@@ -69,6 +93,13 @@ def define_recurrent_critic(timesteps, features):
     return recurrent_critic
 
 def define_recurrent_generator(timesteps, latent_dim, features):
+    ''' Define recurrent generator
+       args: 
+         dimensions timesteps, features.
+         latent dim: hyper-parameter
+       return:
+         recurrent generator model
+    '''
     recurrent_generator = tfkm.Sequential([
         tfkl.RepeatVector(timesteps, input_shape = [latent_dim]),
         # upsamples
@@ -85,15 +116,33 @@ def define_recurrent_generator(timesteps, latent_dim, features):
 
 # Noise generator
 def generate_noise(no, latent_dim):
+    ''' Generates Gaussian noise with shape [no, latent_dim]
+    '''
     noise = tf.random.normal(shape = [no, latent_dim])
     return noise
 
 # implementation of wasserstein loss
 def wasserstein_loss(y_true, y_pred):
+    ''' Implementation of Wasserstein loss
+    args:
+       y_true: true values (-1 for observed and 1 for missing). 
+       y_pred: predicted values.
+     
+    '''
     return tf.keras.backend.mean(y_true * y_pred)
 
 # Define loss and gradients
 def reconstruction_x_real_loss(model, y_true, M, dim):
+    ''' Reconstruction loss for measured continuos variables. 
+      We use the Huber loss, which is less sensitive to outliers in data
+    args:
+       y_true: true measured values. 
+       model: generator.
+       M: mask.
+       dim: dimension of fetures.
+    return:
+       loss and gradients.
+    '''
     with tf.GradientTape() as tape:
         y_pred = model(y_true, training = True)
         mip = tf.cast(1 + dim / 2, tf.int32) # mask initial position
@@ -105,6 +154,16 @@ def reconstruction_x_real_loss(model, y_true, M, dim):
     return rec_loss, tape.gradient(rec_loss, model.trainable_variables)
 
 def reconstruction_x_bin_loss(model, y_true, M, dim):
+    ''' Reconstruction loss for the mask. 
+      We use the a binary cross-entropy loss.
+    args:
+       y_true: true measured values. 
+       model: generator.
+       M: mask.
+       dim: dimension of fetures.
+    return:
+       loss and gradients.
+    '''
     with tf.GradientTape() as tape:
         y_pred = model(y_true, training = True)
         mip = tf.cast(1 + dim / 2, tf.int32) # mask initial position
@@ -116,15 +175,29 @@ def reconstruction_x_bin_loss(model, y_true, M, dim):
     return rec_loss, tape.gradient(rec_loss, model.trainable_variables)
 
 def reconstruction_z_loss(model, z):
+    ''' Reconstruction loss for latent space z. 
+      We use the MSE loss.
+    args:
+       y_true: true measured values. 
+       model: generator.
+       M: mask.
+       dim: dimension of fetures.
+    return:
+       loss and gradients.
+    '''
     with tf.GradientTape() as tape:
         z_pred = model(z, training = True)
         loss = tf.keras.losses.MSE(z, z_pred)
     return loss, tape.gradient(loss, model.trainable_variables)
 
 def critic_loss(model, xhat, xp, y1):
-    # xhat : generated_samples
-    # xp : reproduced_samples
-    # model: discriminator/critic dx
+    '''
+    Critic loss
+    args:
+     xhat : generated_samples
+     xp : reproduced_samples
+     model: discriminator/critic dx
+    '''
     with tf.GradientTape() as tape:
         d_on_real = model(xp, training = True)
         d_on_fake = model(xhat, training = True)
@@ -133,12 +206,27 @@ def critic_loss(model, xhat, xp, y1):
     return d_loss1, tape.gradient(d_loss1, model.trainable_variables)
 
 def generator_loss(model, noise, y2):
+    '''
+    Train generator on critic fake samples
+    args:
+     noise : z
+     y2 : fake labels 
+     model: generator
+    '''
     with tf.GradientTape() as tape:
         d_on_noise = model(noise, training = True)
         d_loss2 = wasserstein_loss(y2, d_on_noise)
     return d_loss2, tape.gradient(d_loss2, model.trainable_variables)
 
 def train_raegan_step(dataset, n_epoch, n_critic, seq_len, latent_dim, dim):
+     '''
+     Train RAE GAN
+    args:
+       dataset: TF dataset
+       n_epoch: number of iterations on the dataset 
+       n_critic: number of critic iterations per generator iteration.
+       latent_dim: hyper-parameter
+    '''
     # create models
     rnn_generator = define_recurrent_generator(seq_len, latent_dim, dim)
     rnn_critic   = define_recurrent_critic(seq_len, dim)
@@ -226,7 +314,20 @@ def train_raegan_step(dataset, n_epoch, n_critic, seq_len, latent_dim, dim):
     return rnn_encogen, train_dx_loss_results, train_dz_loss_results, train_rec_loss_results
 
 def rae_wgan(input_dat, seq_times, padding_mask, batch_size, n_epoch, n_critic, latent_dim):
-
+    '''
+    Call to RAE GAN
+    args:
+      input_dat: imputed data, inputs to RAE WGAN.
+      padding_mask: padding mask of timesteps 
+      batch_size: size of batch.
+      n_epoch: number of iterations on the dataset 
+      n_critic: number of critic iterations per generator iteration.
+      latent_dim: hyper-parameter
+    
+    return:
+      res: simulated data, post-process output from trained RAE-GAN.
+      simulated_padding_mask: simulated_padding_mask, output from trained RAE-GAN.
+    '''
     no, seq_len, dim = input_dat.shape
     input_dat = tf.cast(input_dat, tf.float32)
     padding_mask = tf.cast(padding_mask, tf.float32)
@@ -246,6 +347,13 @@ def rae_wgan(input_dat, seq_times, padding_mask, batch_size, n_epoch, n_critic, 
 # ------------------------------------------ #
 
 def create_wgain(dim, latent_dim):
+    ''' Define WGAIN
+       args: 
+         dim feautres dimension.
+         latent dim: hyper-parameter
+       return:
+         recurrent wgain model
+    '''
     # define critic weight clipping
     class ClipConstraint(keras.constraints.Constraint):
         def __init__(self, clip_value):
@@ -285,6 +393,12 @@ def create_wgain(dim, latent_dim):
     return tfkm.Sequential([generator, critic])
 
 def hint_generator(X, M):
+  ''' Hint generator
+    args:
+      X: data with raw imputed values
+      M: mask
+     return : hint input to generator network.
+    '''
     # takes X: data with raw imputed values
     #       M: mask
     # return : hint input to generator network.
@@ -294,12 +408,25 @@ def hint_generator(X, M):
 
 # Define loss and gradients
 def discriminator_grad(model, inputs, mask):
+    '''
+    Critic loss
+    args:
+     inputs : noisy input dataset
+     mask : mask of missing values
+     model: discriminator/critic 
+    '''
     with tf.GradientTape() as tape:
         output = model(inputs, training = True)
         loss_value = wasserstein_loss(y_true = mask, y_pred = output)
     return loss_value, tape.gradient(loss_value, model.trainable_variables)
 
 def gain_grad(gain, inputs):
+     '''
+    Generator loss and grads
+    args:
+     inputs : noisy input dataset
+     model: gain model
+    '''
     with tf.GradientTape() as tape:
         output = gain(inputs, training = True)
         y2 = - tf.ones(shape = output.shape)
@@ -307,6 +434,14 @@ def gain_grad(gain, inputs):
     return loss_value, tape.gradient(loss_value, gain.trainable_variables)
 
 def rec_grad(generator_layer, inputs, mask, alpha):
+    '''
+    Reconstruction loss and grads
+    args:
+     inputs : noisy input dataset
+     generator_layer : generator
+     mask: mask of missing values
+     alpha: hyper-parameter
+    '''
     with tf.GradientTape() as tape:
         output = generator_layer(inputs, training = True)
         y_true = inputs
@@ -315,6 +450,18 @@ def rec_grad(generator_layer, inputs, mask, alpha):
     return rec_loss, tape.gradient(rec_loss, generator_layer.trainable_variables)
 
 def train_wgain(dataset, gain, n_epoch, n_critic, alpha):
+    '''Train wgain function
+  
+    Args:
+      - dataset: A dataset TF2 object.
+      - gain: a gain model.
+      - n_epoch: number of iterations.
+      - alpha: hyper-parameter
+        
+    Returns:
+      - gain: Trained model
+      - critic loss, generator loss and reconstruction loss for monitoring.
+    '''
 
     generator, discriminator = gain.layers
     d_optimizer = keras.optimizers.RMSprop(lr=0.00005)
@@ -357,6 +504,23 @@ def train_wgain(dataset, gain, n_epoch, n_critic, alpha):
     return gain, train_d_loss_results, train_g_loss_results, train_rec_loss_results
 
 def imputation(comp_data, mask_data, padding_mask, batch_size, n_epoch, alpha, n_critic):
+    '''Call GAIN method
+  
+    Args:
+      - comp_data: original data with missing values
+      - mask_data: mask of missing values on original data.
+      - padding mask: mask of time-steps that are padded.
+      - wgain_parameters: WGAIN network parameters:
+        - batch_size: Batch size
+        - n_critic: Number of iterations of the critic per generator
+        - alpha: Hyperparameter
+        - n_epoch: Iterations on the data
+        
+    Returns:
+      - imputed_data: imputed data
+      - padding mask: same as input padding mask
+      - seq_times: T actual lenght for each observed individual n.
+    '''
 
     input_dat, input_mask, seq_times, seq_len = preformat_data_gain(comp_data, mask_data, padding_mask)
     input_dat = np.concatenate(input_dat, axis = 0)
@@ -384,6 +548,15 @@ def imputation(comp_data, mask_data, padding_mask, batch_size, n_epoch, alpha, n
 
 # Interpolation module
 def interpolation_fun(dat, padding_mask) :
+    """Interpolation function.
+    Args:
+        - data: input data
+        - padding_mask: original padding mask
+    Returns:
+        - dat: interpolated data
+        - median_val: median value for each feature d.
+        - all_nan: vector d indicating if a variable is completely missing.
+    """
     no, seq_len, dim = dat.shape
     def nan_helper(y):
         return np.isnan(y), lambda z: z.nonzero()[0]
@@ -431,6 +604,15 @@ def MinMaxScaler(ori_data, padder_value = -1.):
     return norm_data, max_value, min_value
 
 def DeScaler(data, max_value, min_value, all_nan):
+   """Scale Un-Normalizer.
+    Args:
+        - data: input data
+        - max_value: vector d 
+        - min_value: vector d
+        - all_nan: vector d, indicator if all is nan for a feature = 1, otherwise = 0.
+    Returns:
+        - res: un-normalized data
+    """
     no, seq_len, dim = data.shape
     dim = len(all_nan)
     res = - np.ones(shape = (no, seq_len, dim))
@@ -450,6 +632,15 @@ def DeScaler(data, max_value, min_value, all_nan):
     return res
 
 def preformat_data_gain(dat, mask, padding_mask):
+    """Preformat data helpere for GAIN.
+
+    Args:
+        input data: Input data np.ndarray shape [num_examples, max_seq_len, num_features].
+        seq_times : T dimension
+    Returns:
+        foo_imputed input data to WGAIN np.ndarray shape [num_examples, max_seq_len, num_features].
+        foo_mask np.ndarray shape [num_examples, max_seq_len, num_features].
+    """
     no, seq_len, dim = np.asarray(dat).shape
     # drop rectangular array in favour of ragged array approach
     foo_imputed = list()
@@ -463,6 +654,15 @@ def preformat_data_gain(dat, mask, padding_mask):
     return foo_imputed, foo_mask, seq_times, seq_len
 
 def post_process_data_gain(generated_imputed_data, mask, seq_times):
+    """Post process wgain helper.
+
+    Args:
+        input data: Input data np.ndarray shape [num_examples, max_seq_len, num_features].
+        seq_times : T dimension
+    Returns:
+        output input data to WGAIN np.ndarray shape [num_examples, max_seq_len, num_features].
+        padding_mask np.ndarray shape [num_examples, max_seq_len, num_features].
+    """
     no = len(seq_times)
     foo_generated_imputed = []
     ind = 0
@@ -474,6 +674,15 @@ def post_process_data_gain(generated_imputed_data, mask, seq_times):
     return foo_generated_imputed
 
 def post_process_list_wgain(dat, max_seq_len):
+  """Post process wgain helper.
+
+    Args:
+        input data: Input data np.ndarray shape [num_examples, max_seq_len, num_features].
+        seq_times : T dimension
+    Returns:
+        output input data to WGAIN np.ndarray shape [num_examples, max_seq_len, num_features].
+        padding_mask np.ndarray shape [num_examples, max_seq_len, num_features].
+    """
     no = len(dat)
     dim = dat[0].shape[1]
     output = - np.ones(shape = (no, max_seq_len, dim))
@@ -485,6 +694,16 @@ def post_process_list_wgain(dat, max_seq_len):
     return output, padding_mask
 
 def bootstrap_results(model, input_data, seq_times):
+  """Bootstrap original data and predict.
+
+    Args:
+        model: a pre-trained G(E(x)) model
+        input data: Input data np.ndarray shape [num_examples, max_seq_len, num_features].
+        seq_times : T dimension
+    Returns:
+        simulated_data np.ndarray shape [num_examples, max_seq_len, num_features].
+        simulated_padding_mask np.ndarray shape [num_examples, max_seq_len, num_features].
+    """
     no, seq_len, dim = input_data.shape
     boots =  resample(range(no), replace=True, n_samples=no)
     simulated_data = - np.ones(shape = (no, seq_len, dim))
@@ -503,6 +722,17 @@ def bootstrap_results(model, input_data, seq_times):
     return simulated_data, simulated_padding_mask
 
 def post_process_rgan(obj):
+  """RGAN output Post-process.
+
+    Args:
+        obj: Input data np.ndarray shape [num_examples, max_seq_len, num_features].
+        the output from AE-WGAN network
+
+    Returns:
+        Return format is:
+            np.ndarray shape [num_examples, max_seq_len, num_features].
+        returns simulated data, with mask.
+    """
     def sigmoid(x):
         if x >= 0:
             z = np.exp(-x)
@@ -534,9 +764,11 @@ def hider(input_dict: Dict) -> Union[np.ndarray, Tuple[np.ndarray, Optional[np.n
 
     Returns:
         Return format is:
-            np.ndarray (of float) [, np.ndarray (of bool)]
+            np.ndarray (of float) [, np.ndarray (of bool), n_seeds]
         first argument is the hider generated data, expected shape [num_examples, max_seq_len, num_features]);
-        second optional argument is the corresponding padding mask, same shape.
+        second argument is the corresponding padding mask, same shape.
+		third argument is the number of seeds in the hider evaluation step as commented in Slack for faster run-time evaluations in the platform.
+        
     """
 
     # Get the inputs.
